@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Seismo Almaty — ИИ-детектор</title>
+<style>
+:root{
+  --bg:#eef4fb; --card:#ffffff; --line:#dbe5f0; --text:#0f2236; --muted:#5d7187;
+  --blue:#2563eb; --blue-soft:#e6efff;
+  --quake:#e5484d; --knock:#f59e0b; --steps:#8b5cf6; --quiet:#22a06b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:14px 18px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+header .sub{color:var(--muted);font-size:13px}
+.badge{margin-left:auto;padding:8px 14px;border-radius:999px;font-weight:700;color:#fff;background:var(--quiet);transition:background .3s}
+body[data-level=WARNING] .badge{background:var(--knock)}
+body[data-level=EMERGENCY] .badge{background:var(--quake);animation:pulse 1s infinite}
+@keyframes pulse{50%{filter:brightness(1.3)}}
+main{max-width:1150px;margin:0 auto;padding:16px;display:grid;grid-template-columns:1.4fr 1fr;gap:14px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:0}
+.card h2{margin:0 0 10px;font-size:15px}
+.step{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-size:12px;margin-right:6px}
+.muted{color:var(--muted)} .small{font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,select{font:inherit;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--text);padding:8px 12px;cursor:pointer}
+button:hover{border-color:var(--blue)}
+button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+button:disabled{opacity:.5;cursor:default}
+canvas{width:100%;height:190px;display:block;border-radius:12px;background:#0b1622}
+.verdict{font-size:22px;font-weight:800;margin:4px 0}
+.bars{display:grid;gap:6px;margin-top:8px}
+.bar{display:grid;grid-template-columns:130px 1fr 48px;gap:8px;align-items:center;font-size:13px}
+.bar .track{height:12px;background:#edf1f6;border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;width:0;transition:width .2s}
+.bar b{text-align:right;font-variant-numeric:tabular-nums}
+.classes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.cls{border:1px solid var(--line);border-radius:12px;padding:10px}
+.cls .n{font-size:12px;color:var(--muted)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.log{max-height:230px;overflow:auto;font-size:13px}
+.log div{padding:6px 0;border-top:1px solid var(--line)}
+.log div:first-child{border-top:0}
+.feat{display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:13px;font-variant-numeric:tabular-nums}
+.progress{height:8px;background:#edf1f6;border-radius:4px;overflow:hidden;margin-top:8px}
+.progress i{display:block;height:100%;width:0;background:var(--blue)}
+.full{grid-column:1/-1}
+.note{background:var(--blue-soft);border-radius:12px;padding:10px 12px;font-size:13px}
+</style>
+</head>
+<body data-level="NORMAL">
+<header>
+  <div>
+    <h1>🧠 Seismo Almaty — ИИ-детектор землетрясений</h1>
+    <div class="sub">Нейросеть отличает землетрясение от удара, шагов и шума · учебный прототип</div>
+  </div>
+  <div class="badge" id="badge">NORMAL</div>
+</header>
+
+<main>
+  <!-- LEFT -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Сигнал датчика (последние 10 с)</h2>
+      <div class="row">
+        <select id="source">
+          <option value="sim">Симулятор</option>
+          <option value="phone">Датчик телефона</option>
+          <option value="serial">Arduino (USB)</option>
+        </select>
+        <button id="connectBtn" hidden>Подключить</button>
+      </div>
+    </div>
+    <canvas id="chart" width="900" height="190" style="margin-top:10px"></canvas>
+    <div class="row" id="simRow" style="margin-top:10px">
+      <span class="small muted">Создать событие:</span>
+      <button data-sim="quake">🌍 Землетрясение</button>
+      <button data-sim="knock">✊ Удар по столу</button>
+      <button data-sim="steps">🚶 Шаги рядом</button>
+    </div>
+    <div id="srcHint" class="small muted" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Решение ИИ</h2>
+    <div class="verdict" id="verdict">Ожидание…</div>
+    <div class="small muted" id="decision">Модель ещё не обучена — пройдите шаги 1 и 2 ниже.</div>
+    <div class="bars" id="bars"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="resetBtn">↺ Сбросить тревогу</button>
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="card">
+    <h2><span class="step">1</span>Сбор обучающих примеров</h2>
+    <p class="small muted" style="margin:0 0 10px">Нажмите «Записать» и в течение 3 секунд создайте событие (кнопкой симулятора, стуком по столу или раскачиванием). Или быстро сгенерируйте примеры.</p>
+    <div class="classes" id="classes"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="genBtn">⚙ Добавить 40 синтетических примеров каждого класса</button>
+      <button id="clearBtn">Очистить</button>
+    </div>
+    <div class="row small" style="margin-top:8px">
+      <button id="exportBtn">⬇ Сохранить датасет</button>
+      <label class="small"><input type="file" id="importFile" accept=".json" hidden><span style="color:var(--blue);cursor:pointer;text-decoration:underline">⬆ Загрузить датасет</span></label>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card">
+    <h2><span class="step">2</span>Обучение нейросети</h2>
+    <p class="small muted" style="margin:0 0 10px">Сеть: 8 признаков → 24 → 16 → 4 класса. Обучается прямо в браузере, без интернета и сервера.</p>
+    <button class="primary" id="trainBtn">🧠 Обучить модель</button>
+    <div class="progress"><i id="prog"></i></div>
+    <div class="small" id="trainInfo" style="margin-top:8px"></div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="card">
+    <h2><span class="step">3</span>Почему ИИ так решил (признаки окна 3 с)</h2>
+    <div class="feat" id="feat"></div>
+  </div>
+
+  <div class="card">
+    <h2>Журнал событий</h2>
+    <div class="log" id="log"><div class="muted">Пока событий нет.</div></div>
+  </div>
+
+  <div class="card full note">
+    <b>Как это работает.</b> Датчик даёт 50 измерений в секунду. Каждые 0,25 с ИИ берёт последнее окно в 3 секунды и считает 8 признаков: амплитуду, энергию, «остроту» пика, долю времени с тряской, частоту колебаний, долю низких частот, число всплесков и эксцесс. У землетрясения тряска долгая и низкочастотная, у удара — короткий острый пик, у шагов — ритмичные всплески. Тревога включается, только если ИИ уверен в землетрясении (&gt;75%) три раза подряд — это защищает от ложных срабатываний и лишних SOS.
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script>
+/* ===================== НАСТРОЙКИ ===================== */
+const FS = 50;               // частота дискретизации, Гц
+const WIN = FS * 3;          // окно анализа 3 с
+const VIEW = FS * 10;        // на графике 10 с
+const CLASSES = [
+  {id:'quake', name:'Землетрясение', color:'#e5484d'},
+  {id:'knock', name:'Удар / хлопок', color:'#f59e0b'},
+  {id:'steps', name:'Шаги / ходьба', color:'#8b5cf6'},
+  {id:'quiet', name:'Тишина / шум',  color:'#22a06b'},
+];
+const FEATURE_NAMES = ['Пик (log)','Энергия RMS (log)','Острота пика (log)','Доля тряски','Частота, норм.','Доля низких частот','Всплески','Эксцесс (log)'];
+const QUAKE_P = 0.75, QUAKE_CONFIRM = 3;
+
+const $ = id => document.getElementById(id);
+const rand = (a,b) => a + Math.random()*(b-a);
+const randn = () => { let u=0,v=0; while(!u) u=Math.random(); while(!v) v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); };
+const store = { get(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d }catch(e){ return d } }, set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch(e){} } };
+
+/* ===================== СИГНАЛ ===================== */
+const S = {
+  source:'sim', buf:new Array(VIEW).fill(0), inject:[],
+  phone:{x:0,y:0,z:0, px:0,py:0,pz:0, hx:0,hy:0,hz:0, ok:false},
+  serialVal:0, serialWriter:null,
+  recording:null, dataset: store.get('seismoAI_data', []),
+  model:null, norm:null, fallback:null,
+  level:'NORMAL', quakeCount:0, activeUntil:0, floor:0.03, lastEvent:null,
+};
+
+// --- синтетические события (м/с²) ---
+function genQuake(){
+  const dur=rand(6,10), n=Math.round(dur*FS), A=rand(0.6,3), f1=rand(1.2,3), f2=rand(3,6), rise=rand(0.8,2), p1=rand(0,6), p2=rand(0,6);
+  const out=[];
+  for(let i=0;i<n;i++){
+    const t=i/FS;
+    const env = t<rise ? (t/rise)**2 : Math.exp(-(t-rise)/(dur*0.35));
+    const pw = t<1.2 ? 0.15*A*(t/1.2)*Math.sin(2*Math.PI*10*t) : 0;          // P-волна: слабая, частая
+    const sw = A*env*(0.6*Math.sin(2*Math.PI*f1*t+p1)+0.4*Math.sin(2*Math.PI*f2*t+p2)) + 0.12*A*env*randn(); // S-волна
+    out.push(pw+sw);
+  }
+  return out;
+}
+function genKnock(){
+  const n=Math.round(0.6*FS), A=rand(2,8), f=rand(12,20), tau=rand(0.03,0.08), out=[];
+  for(let i=0;i<n;i++){ const t=i/FS; out.push(A*Math.exp(-t/tau)*Math.sin(2*Math.PI*f*t)); }
+  return out;
+}
+function genSteps(){
+  const dur=rand(3,6), n=Math.round(dur*FS), period=rand(0.45,0.65), A=rand(0.3,1), out=new Array(n).fill(0);
+  for(let tk=rand(0,0.3); tk<dur; tk+=period*rand(0.9,1.1)){
+    const a=A*rand(0.7,1.2), k0=Math.round(tk*FS);
+    for(let i=k0;i<Math.min(n,k0+FS*0.4);i++){ const t=(i-k0)/FS; out[i]+=a*Math.exp(-t/0.07)*Math.sin(2*Math.PI*9*t); }
+  }
+  return out;
+}
+const GEN = {quake:genQuake, knock:genKnock, steps:genSteps, quiet:()=>[]};
+
+// окно для обучения: шум + событие со случайным сдвигом
+function syntheticWindow(cls){
+  const noise=rand(0.01,0.06), w=Array.from({length:WIN},()=>noise*randn());
+  const ev=GEN[cls]();
+  if(ev.length){
+    const off = cls==='quake' ? Math.round(rand(-ev.length+FS*1.5, WIN-FS*1.5)) : Math.round(rand(0, Math.max(0, WIN-ev.length)));
+    for(let i=0;i<ev.length;i++){ const j=i+off; if(j>=0 && j<WIN) w[j]+=ev[i]; }
+  } else if(Math.random()<0.4){ // «тишина» с лёгкой случайной вибрацией (холодильник, транспорт вдали)
+    const f=rand(20,24), a=rand(0.01,0.05); for(let i=0;i<WIN;i++) w[i]+=a*Math.sin(2*Math.PI*f*i/FS);
+  }
+  return w;
+}
+
+/* ===================== ПРИЗНАКИ ===================== */
+function features(w){
+  const n=w.length, mean=w.reduce((a,b)=>a+b,0)/n, x=w.map(v=>v-mean);
+  let peak=0, s2=0, s4=0; for(const v of x){ const a=Math.abs(v); if(a>peak) peak=a; s2+=v*v; s4+=v**4; }
+  const rms=Math.sqrt(s2/n)+1e-6, crest=peak/rms, kurt=(s4/n)/(rms**4);
+  // огибающая
+  const env=new Array(n).fill(0); for(let i=0;i<n;i++){ let s=0,c=0; for(let k=Math.max(0,i-4);k<=Math.min(n-1,i+4);k++){ s+=Math.abs(x[k]); c++ } env[i]=s/c; }
+  const maxEnv=Math.max(...env)+1e-6;
+  const active=env.filter(e=>e>0.3*maxEnv).length/n;
+  let bursts=0; for(let i=1;i<n;i++) if(env[i-1]<0.5*maxEnv && env[i]>=0.5*maxEnv) bursts++;
+  // частота по пересечениям нуля только в активной части
+  let zc=0, act=0; for(let i=1;i<n;i++){ if(env[i]>0.3*maxEnv){ act++; if((x[i-1]<0)!==(x[i]<0)) zc++; } }
+  const freq = act ? (zc/2)/(act/FS) : 0;             // Гц
+  // доля низких частот: сглаживание скользящим средним (~< 5 Гц)
+  const lp=new Array(n).fill(0); for(let i=0;i<n;i++){ let s=0,c=0; for(let k=Math.max(0,i-4);k<=Math.min(n-1,i+4);k++){ s+=x[k]; c++ } lp[i]=s/c; }
+  const lowRatio=Math.sqrt(lp.reduce((a,b)=>a+b*b,0)/n)/rms;
+  return [Math.log(peak+1e-3), Math.log(rms), Math.log(crest), active, freq/25, lowRatio, bursts/10, Math.log(kurt+1e-6)];
+}
+function computeNorm(X){
+  const F=X[0].length, mu=new Array(F).fill(0), sd=new Array(F).fill(0);
+  for(const r of X) r.forEach((v,j)=>mu[j]+=v/X.length);
+  for(const r of X) r.forEach((v,j)=>sd[j]+=(v-mu[j])**2/X.length);
+  return {mu, sd:sd.map(v=>Math.sqrt(v)||1)};
+}
+const applyNorm = f => f.map((v,j)=>(v-S.norm.mu[j])/S.norm.sd[j]);
+
+/* ===================== ДАТАСЕТ ===================== */
+function renderClasses(){
+  $('classes').innerHTML = CLASSES.map(c=>{
+    const n=S.dataset.filter(d=>d.label===c.id).length;
+    const rec = S.recording && S.recording.cls===c.id;
+    return `<div class="cls"><div><span class="dot" style="background:${c.color}"></span><b>${c.name}</b></div>
+      <div class="n">примеров: ${n}</div>
+      <button style="margin-top:6px" data-rec="${c.id}" ${S.recording?'disabled':''}>${rec?'● Запись…':'● Записать 3 с'}</button></div>`;
+  }).join('');
+  document.querySelectorAll('[data-rec]').forEach(b=>b.onclick=()=>startRecording(b.dataset.rec));
+  store.set('seismoAI_data', S.dataset);
+}
+function startRecording(cls){
+  S.recording={cls, until:performance.now()+3000};
+  if(S.source==='sim' && cls!=='quiet') injectEvent(cls);   // в симуляторе событие создаём сами
+  renderClasses();
+  setTimeout(()=>{
+    S.dataset.push({label:cls, w:S.buf.slice(-WIN)});
+    S.recording=null; renderClasses();
+  },3000);
+}
+$('genBtn').onclick=()=>{ for(const c of CLASSES) for(let i=0;i<40;i++) S.dataset.push({label:c.id, w:syntheticWindow(c.id)}); renderClasses(); };
+$('clearBtn').onclick=()=>{ S.dataset=[]; renderClasses(); };
+$('exportBtn').onclick=()=>{
+  const blob=new Blob([JSON.stringify({fs:FS, win:WIN, classes:CLASSES.map(c=>c.id), data:S.dataset})],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='seismo-dataset.json'; a.click();
+};
+$('importFile').onchange=async e=>{
+  try{ const j=JSON.parse(await e.target.files[0].text()); S.dataset=S.dataset.concat(j.data||[]); renderClasses(); }catch(err){ alert('Не удалось прочитать файл'); }
+};
+
+/* ===================== ОБУЧЕНИЕ ===================== */
+$('trainBtn').onclick=train;
+async function train(){
+  const counts=CLASSES.map(c=>S.dataset.filter(d=>d.label===c.id).length);
+  if(counts.some(n=>n<5)){ $('trainInfo').textContent='Нужно минимум 5 примеров каждого класса. Нажмите «Добавить 40 синтетических примеров».'; return; }
+  $('trainBtn').disabled=true;
+  // перемешиваем, чтобы 20% проверочных примеров были из всех классов
+  const data=S.dataset.slice().sort(()=>Math.random()-0.5);
+  const X=data.map(d=>features(d.w)), Y=data.map(d=>CLASSES.findIndex(c=>c.id===d.label));
+  S.norm=computeNorm(X); const Xn=X.map(applyNorm);
+  // запасной классификатор (ближайший центроид) — работает даже без TensorFlow
+  S.fallback=CLASSES.map((c,k)=>{ const rows=Xn.filter((_,i)=>Y[i]===k); return rows[0].map((_,j)=>rows.reduce((a,r)=>a+r[j],0)/rows.length); });
+  if(window.tf){
+    const xs=tf.tensor2d(Xn), ys=tf.oneHot(tf.tensor1d(Y,'int32'),CLASSES.length);
+    const m=tf.sequential();
+    m.add(tf.layers.dense({inputShape:[Xn[0].length],units:24,activation:'relu'}));
+    m.add(tf.layers.dense({units:16,activation:'relu'}));
+    m.add(tf.layers.dense({units:CLASSES.length,activation:'softmax'}));
+    m.compile({optimizer:tf.train.adam(0.01),loss:'categoricalCrossentropy',metrics:['accuracy']});
+    const EPOCHS=60;
+    await m.fit(xs,ys,{epochs:EPOCHS,batchSize:32,shuffle:true,validationSplit:0.2,callbacks:{onEpochEnd:(ep,l)=>{
+      $('prog').style.width=((ep+1)/EPOCHS*100)+'%';
+      $('trainInfo').innerHTML=`Эпоха ${ep+1}/${EPOCHS} · точность на обучении <b>${(l.acc*100).toFixed(1)}%</b> · на проверке <b>${(l.val_acc*100).toFixed(1)}%</b>`;
+    }}});
+    xs.dispose(); ys.dispose();
+    S.model=m;
+    try{ await m.save('localstorage://seismoAI'); store.set('seismoAI_norm',{norm:S.norm,fallback:S.fallback}); }catch(e){}
+    $('trainInfo').innerHTML+=`<br>✅ Модель обучена на ${S.dataset.length} примерах и сохранена в браузере.`;
+  } else {
+    store.set('seismoAI_norm',{norm:S.norm,fallback:S.fallback});
+    $('prog').style.width='100%';
+    $('trainInfo').innerHTML='TensorFlow.js не загрузился (нет интернета) — используется упрощённый классификатор (ближайший центроид).';
+  }
+  $('decision').textContent='Модель готова. Создайте событие — ИИ его распознает.';
+  $('trainBtn').disabled=false;
+}
+async function loadSaved(){
+  const saved=store.get('seismoAI_norm',null); if(!saved) return;
+  S.norm=saved.norm; S.fallback=saved.fallback;
+  try{ if(window.tf) S.model=await tf.loadLayersModel('localstorage://seismoAI'); }catch(e){}
+  $('trainInfo').textContent='Загружена ранее обученная модель.';
+  $('decision').textContent='Модель готова. Создайте событие — ИИ его распознает.';
+}
+function predict(f){
+  const x=applyNorm(f);
+  if(S.model) return tf.tidy(()=>Array.from(S.model.predict(tf.tensor2d([x])).dataSync()));
+  const d=S.fallback.map(c=>Math.exp(-0.5*c.reduce((a,v,j)=>a+(v-x[j])**2,0)));
+  const s=d.reduce((a,b)=>a+b,0)||1; return d.map(v=>v/s);
+}
+
+/* ===================== ИСТОЧНИКИ ===================== */
+function injectEvent(cls){ const ev=GEN[cls](); for(let i=0;i<ev.length;i++) S.inject[i]=(S.inject[i]||0)+ev[i]; }
+document.querySelectorAll('[data-sim]').forEach(b=>b.onclick=()=>injectEvent(b.dataset.sim));
+
+$('source').onchange=e=>{
+  S.source=e.target.value;
+  $('simRow').hidden = S.source!=='sim';
+  $('connectBtn').hidden = S.source==='sim';
+  $('connectBtn').textContent = S.source==='phone' ? 'Включить датчик телефона' : 'Подключить Arduino';
+  $('srcHint').textContent = {
+    sim:'Симулятор: события создаются кнопками. Модель можно обучать и проверять без железа.',
+    phone:'Откройте эту страницу на телефоне, положите его на стол экраном вверх и качайте стол / стучите рядом.',
+    serial:'Chrome или Edge. Arduino с MPU6050 отправляет по USB строки «ax,ay,az» (115200 бод) — прошивка: arduino/esp32_mpu6050.ino.'
+  }[S.source];
+};
+$('connectBtn').onclick=async()=>{
+  if(S.source==='phone'){
+    try{
+      if(typeof DeviceMotionEvent!=='undefined' && DeviceMotionEvent.requestPermission){ if(await DeviceMotionEvent.requestPermission()!=='granted') throw 0; }
+      window.addEventListener('devicemotion',ev=>{ const a=ev.accelerationIncludingGravity||ev.acceleration||{}; S.phone.x=a.x||0; S.phone.y=a.y||0; S.phone.z=a.z||0; S.phone.ok=true; });
+      $('srcHint').textContent='Датчик телефона включён.';
+    }catch(e){ $('srcHint').textContent='Датчик движения недоступен в этом браузере / устройстве.'; }
+  } else {
+    if(!('serial' in navigator)){ $('srcHint').textContent='Web Serial работает только в Chrome / Edge на компьютере.'; return; }
+    try{
+      const port=await navigator.serial.requestPort(); await port.open({baudRate:115200});
+      S.serialWriter=port.writable.getWriter();
+      $('srcHint').textContent='Arduino подключена.';
+      const reader=port.readable.pipeThrough(new TextDecoderStream()).getReader(); let buf='';
+      while(true){ const {value,done}=await reader.read(); if(done) break; buf+=value; const lines=buf.split(/\r?\n/); buf=lines.pop();
+        for(const ln of lines){ if(ln.startsWith('#')) continue; const nums=ln.split(/[,;\s]+/).map(Number).filter(v=>!isNaN(v));
+          if(nums.length>=3){ // сырые значения MPU6050 → м/с² (±2g: 16384 ед. = 1g)
+            const k=9.81/16384; S.phone.x=nums[0]*k; S.phone.y=nums[1]*k; S.phone.z=nums[2]*k; S.phone.ok=true;
+          } else if(nums.length===1){ S.serialVal=nums[0]; }
+        } }
+    }catch(e){ $('srcHint').textContent='Не удалось подключить: '+e.message; }
+  }
+};
+// фильтр верхних частот: убирает гравитацию и наклон, оставляет вибрацию
+function highpass(){
+  const p=S.phone, a=0.9;
+  p.hx=a*(p.hx+p.x-p.px); p.hy=a*(p.hy+p.y-p.py); p.hz=a*(p.hz+p.z-p.pz);
+  p.px=p.x; p.py=p.y; p.pz=p.z;
+  return p.hx+p.hy+p.hz;
+}
+function nextSample(){
+  let v=0;
+  if(S.source==='sim'){ v=0.02*randn(); if(S.inject.length) v+=S.inject.shift(); }
+  else if(S.phone.ok) v=highpass();
+  else if(S.source==='serial') v=S.serialVal;
+  return v;
+}
+
+/* ===================== ДЕТЕКТОР ===================== */
+function setLevel(l){
+  if(S.level===l) return; S.level=l;
+  document.body.dataset.level=l; $('badge').textContent=l;
+  if(S.serialWriter) S.serialWriter.write(new TextEncoder().encode(l==='EMERGENCY'?'E\n':l==='WARNING'?'W\n':'N\n')).catch(()=>{});
+}
+$('resetBtn').onclick=()=>{ S.quakeCount=0; setLevel('NORMAL'); $('verdict').textContent='Ожидание…'; };
+
+function addLog(cls,p,alarm){
+  const c=CLASSES.find(c=>c.id===cls);
+  if($('log').firstElementChild && $('log').firstElementChild.classList.contains('muted')) $('log').innerHTML='';
+  const d=document.createElement('div');
+  d.innerHTML=`<span class="dot" style="background:${c.color}"></span><b>${c.name}</b> · ${(p*100).toFixed(0)}% · ${new Date().toLocaleTimeString('ru-RU')} — ${alarm?'<b style="color:var(--quake)">ТРЕВОГА</b>':'тревога не нужна'}`;
+  $('log').prepend(d);
+}
+function rmsOf(a){ return Math.sqrt(a.reduce((s,v)=>s+v*v,0)/a.length); }
+
+function analyze(){
+  const now=performance.now(), w=S.buf.slice(-WIN), sta=rmsOf(S.buf.slice(-FS/2));
+  const f=features(w);
+  $('feat').innerHTML=FEATURE_NAMES.map((n,i)=>`<span>${n}</span><b>${f[i].toFixed(2)}</b>`).join('');
+  const isActive = sta > Math.max(0.08, 4*S.floor);
+  if(!isActive && now>S.activeUntil){ S.floor=0.98*S.floor+0.02*sta; }
+  if(isActive) S.activeUntil=now+2500;
+  if(!S.norm){ return; }
+  if(now>S.activeUntil){
+    if(S.lastEvent){ addLog(S.lastEvent.cls,S.lastEvent.p,S.lastEvent.alarm); S.lastEvent=null; }
+    S.quakeCount=0;
+    if(S.level==='WARNING') setLevel('NORMAL');
+    if(S.level!=='EMERGENCY'){ $('verdict').textContent='Тишина'; $('verdict').style.color='var(--quiet)'; $('decision').textContent='Колебаний нет. Мониторинг продолжается.'; }
+    renderBars(null); return;
+  }
+  const p=predict(f), k=p.indexOf(Math.max(...p)), cls=CLASSES[k];
+  renderBars(p);
+  $('verdict').textContent=`${cls.name} — ${(p[k]*100).toFixed(0)}%`; $('verdict').style.color=cls.color;
+  if(cls.id==='quake' && p[k]>=QUAKE_P){ S.quakeCount++; } else S.quakeCount=0;
+  if(S.quakeCount>=QUAKE_CONFIRM){
+    setLevel('EMERGENCY'); $('decision').innerHTML='<b>Землетрясение подтверждено ИИ.</b> Включены тревога, аварийное отключение и SOS (симуляция).';
+  } else if(S.level!=='EMERGENCY'){
+    setLevel('WARNING');
+    $('decision').textContent = cls.id==='quake' ? 'Похоже на землетрясение — проверяю ещё раз…' : 'Колебание распознано как не землетрясение — тревога НЕ включается.';
+  }
+  // запоминаем самое «сильное» решение за событие для журнала
+  const alarm=S.level==='EMERGENCY';
+  if(!S.lastEvent || p[k]>S.lastEvent.p || alarm) S.lastEvent={cls:cls.id,p:p[k],alarm:alarm || (S.lastEvent&&S.lastEvent.alarm)};
+}
+function renderBars(p){
+  $('bars').innerHTML=CLASSES.map((c,i)=>`<div class="bar"><span><span class="dot" style="background:${c.color}"></span>${c.name}</span>
+    <div class="track"><div class="fill" style="width:${p?p[i]*100:0}%;background:${c.color}"></div></div><b>${p?(p[i]*100).toFixed(0)+'%':'—'}</b></div>`).join('');
+}
+
+/* ===================== ГРАФИК ===================== */
+const cv=$('chart'), cx=cv.getContext('2d');
+function draw(){
+  const W=cv.width,H=cv.height,mid=H/2;
+  cx.fillStyle='#0b1622'; cx.fillRect(0,0,W,H);
+  cx.strokeStyle='#17293a'; cx.lineWidth=1;
+  for(let s=0;s<=10;s++){ const x=s/10*W; cx.beginPath(); cx.moveTo(x,0); cx.lineTo(x,H); cx.stroke(); }
+  cx.beginPath(); cx.moveTo(0,mid); cx.lineTo(W,mid); cx.stroke();
+  // окно анализа
+  cx.fillStyle='rgba(37,99,235,.12)'; cx.fillRect(W*(1-WIN/VIEW),0,W*WIN/VIEW,H);
+  const max=Math.max(1,...S.buf.map(Math.abs));
+  cx.strokeStyle={NORMAL:'#3fdc8b',WARNING:'#f5b13b',EMERGENCY:'#ff5a5f'}[S.level]; cx.lineWidth=1.6; cx.beginPath();
+  S.buf.forEach((v,i)=>{ const x=i/(VIEW-1)*W, y=mid-v/max*mid*0.9; i?cx.lineTo(x,y):cx.moveTo(x,y); }); cx.stroke();
+  cx.fillStyle='#8aa0b6'; cx.font='12px system-ui'; cx.fillText(`±${max.toFixed(2)} м/с²  ·  окно ИИ 3 с`,8,16);
+  if(S.recording){ cx.fillStyle='#ff5a5f'; cx.fillText('● ЗАПИСЬ',W-80,16); }
+}
+
+/* ===================== СТАРТ ===================== */
+let tick=0;
+setInterval(()=>{ S.buf.push(nextSample()); S.buf.shift(); if(++tick%12===0) analyze(); if(tick%3===0) draw(); }, 1000/FS);
+$('source').dispatchEvent(new Event('change'));
+renderClasses(); renderBars(null); loadSaved();
+</script>
+</body>
+</html>
